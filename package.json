@@ -1,0 +1,6 @@
+{
+  "name": "stock-portfolio",
+  "version": "1.0.0",
+  "private": true,
+  "description": "2개 증권사 보유 주식 통합 관리 (KIS Open API 현재가 연동)"
+}
