@@ -83,6 +83,9 @@
   .footnote { color: var(--muted); font-size: 12px; margin-top: 28px; line-height: 1.7; }
   a { color: var(--accent); }
   .price-manual { color: var(--muted); font-size: 10px; }
+  .sync-ok { color: #7ee0a0; border-color: #2f5e44; }
+  .sync-saving { color: #e8c15a; border-color: #5e522f; }
+  .sync-off { color: #ff9a9a; border-color: #5e2f2f; }
 </style>
 </head>
 <body>
@@ -90,7 +93,9 @@
   <header class="top">
     <div>
       <h1>📊 내 주식 포트폴리오</h1>
-      <div class="sub">2개 증권사 보유 주식을 한 곳에서 · 매입가는 입력, 현재가는 자동 조회</div>
+      <div class="sub">2개 증권사 보유 주식을 한 곳에서 · 매입가는 입력, 현재가는 자동 조회
+        <span id="syncStatus" class="badge sync-idle" style="margin-left:6px;">동기화 준비 중…</span>
+      </div>
     </div>
     <div class="toolbar">
       <button id="refreshBtn" class="primary">🔄 현재가 새로고침</button>
@@ -152,7 +157,71 @@ function load() {
   } catch (e) {}
   return JSON.parse(JSON.stringify(DEFAULT_DATA));
 }
-function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+function saveLocal() { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+function save() { saveLocal(); scheduleRemoteSave(); }
+
+/* ---------------- 클라우드 동기화 (어느 브라우저에서 접속해도 같은 데이터) ---------------- */
+const PASS_KEY = "stock_portfolio_pass";
+let remoteAvailable = true;      // 서버 저장소 사용 가능 여부
+let saveTimer = null;
+let passcode = localStorage.getItem(PASS_KEY) || "";
+
+function setSync(text, kind) {
+  const el = document.getElementById("syncStatus");
+  if (!el) return;
+  el.textContent = text;
+  el.className = "badge sync-" + (kind || "idle");
+}
+function authHeaders() { return passcode ? { "x-passcode": passcode } : {}; }
+
+async function loadRemote() {
+  try {
+    const res = await fetch("/api/data", { headers: authHeaders() });
+    if (res.status === 401) {
+      const input = prompt("접근코드를 입력하세요:");
+      if (input) { passcode = input; localStorage.setItem(PASS_KEY, input); return loadRemote(); }
+      remoteAvailable = false; setSync("오프라인 · 이 브라우저에만 저장", "off"); return;
+    }
+    if (res.status === 403) {
+      localStorage.removeItem(PASS_KEY); passcode = "";
+      remoteAvailable = false; setSync("접근코드 오류 · 새로고침 후 재시도", "off"); return;
+    }
+    if (!res.ok) throw new Error("http " + res.status);
+    const j = await res.json();
+    if (j.data && j.data.brokers) {
+      data = j.data;              // 서버 데이터를 우선 사용
+      saveLocal();
+      setSync("☁ 저장됨", "ok");
+    } else {
+      // 서버가 비어 있으면 현재(로컬) 데이터를 서버로 올려 초기화
+      setSync("☁ 저장됨", "ok");
+      scheduleRemoteSave(true);
+    }
+  } catch (e) {
+    remoteAvailable = false;
+    setSync("오프라인 · 이 브라우저에만 저장", "off");
+  }
+}
+
+function scheduleRemoteSave(immediate) {
+  if (!remoteAvailable) return;
+  if (saveTimer) clearTimeout(saveTimer);
+  setSync("저장 중…", "saving");
+  saveTimer = setTimeout(doRemoteSave, immediate ? 0 : 800);
+}
+async function doRemoteSave() {
+  try {
+    const res = await fetch("/api/data", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...authHeaders() },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error("http " + res.status);
+    setSync("☁ 저장됨", "ok");
+  } catch (e) {
+    setSync("저장 실패 · 이 브라우저에는 보관됨", "off");
+  }
+}
 
 /* ---------------- 숫자 포맷 ---------------- */
 const won = n => (n === null || n === "" || isNaN(n)) ? "-" : Math.round(n).toLocaleString("ko-KR") + "원";
@@ -361,6 +430,7 @@ function applyError(code) {
 }
 
 render();
+loadRemote().then(render);
 </script>
 </body>
 </html>
